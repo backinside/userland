@@ -233,6 +233,7 @@ struct cmds_t cmds[] =
 {
    // Turn off power and put in reset
    // handle.first_boot = VC_FALSE;
+	{0x0004, 0x0000, 2},		// Ensure that audio and video buffer enables are clear
 	{0x0002, 0x0F00, 2},		// Assert Reset, [0] = 0: Exit Sleep, wait
 
     {0x0000, 1, 0xFFFF}, 		// V054 requires us to wait 1ms for PLL to lock
