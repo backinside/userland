@@ -322,10 +322,26 @@ component_destroy:
 	return 0;
 }
 
+//The process first loads the cleaned up dump of the regiesters
+//than updates the kown registers to the proper values
+//based on: http://www.seeedstudio.com/wiki/images/3/3c/Ov5647_full.pdf
+
 void loadModeDefaultRegisters(int mode);
+
+void setRegBit(uint16_t reg, int bit, int value) {
+	int i = 0;
+	while(i < regpos && ov5647[i].reg != reg) i++;
+	if(i == regpos) {
+		vcos_log_error("Reg: %d not found!\n", reg);
+		return;
+	}
+	ov5647[i].data ^= (-value ^ ov5647[i].reg) & (1 << bit);
+}
 
 void loadStartRegs(int mode, int hflip, int vflip, int shutter, int iso) {
 	loadModeDefaultRegisters(mode);
+	setRegBit(0x3820, 1, vflip);
+	setRegBit(0x3821, 1, hflip);
 }
 
 void loadModeDefaultRegisters(int mode) {
