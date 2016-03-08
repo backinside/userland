@@ -322,7 +322,8 @@ vcos_log_error("Set pack to %d, unpack to %d", rx_cfg.unpack, rx_cfg.pack);
 
 	start_camera_streaming();
 
-	vcos_sleep(30000);
+	while(1);
+	//vcos_sleep(30000);
 	running = 0;
 
 	stop_camera_streaming();
@@ -367,7 +368,6 @@ void setRegBit(uint16_t reg, int bit, int value) {
 void setReg(uint16_t reg, int startBit, int endBit, int value) {
 	int i;
 	for(i = startBit; i <= endBit; i++) {
-		int n = i - startBit;
 		setRegBit(reg, i, value >> i & 1);
 	}
 }
