@@ -81,10 +81,12 @@ int num_start_regs = 0;
 int regpos = 0;
 
 void addreg(uint16_t reg, uint8_t data) {
-	if(regpos > num_start_regs) {
+	if(regpos >= num_start_regs) {
                 vcos_log_error("Preallocated start reg buffer overrun?!");
-		return;
+                return;
 	}
+	int i = 0;
+	while(i < regpos && ov5647[i].reg != reg) i++;
 
 	ov5647[regpos].reg = reg;
 	ov5647[regpos].data = data;
@@ -93,7 +95,7 @@ void addreg(uint16_t reg, uint8_t data) {
 
 void loadjbealestartregs();
 
-void loadStartRegs(int mode, int hflip, int vflip, int shutter, int iso);
+void loadStartRegs(int mode, int hflip, int vflip, int exposure, int gain);
 
 struct sensor_regs ov5647_stop[] = {
    { 0x0100, 0x00 }
@@ -201,9 +203,32 @@ static void callback(MMAL_PORT_T *port, MMAL_BUFFER_HEADER_T *buffer)
 		mmal_buffer_header_release(buffer);
 }
 
-int main (void)
-{
-	//TODO loadjbealestartregs();
+int main(int argc, char** args) {
+	int mode = 0;
+	int hflip = 0;
+	int vflip = 0;
+	int exposure = 0;
+	int gain = 0;
+	if(argc > 1) {
+		mode = atoi(args[1]);
+	}
+	if(argc > 2) {
+		hflip = atoi(args[2]);
+	}
+	if(argc > 3) {
+		vflip = atoi(args[3]);
+	}
+	if(argc > 4) {
+		exposure = atoi(args[4]);
+	}
+	if(argc > 5) {
+		gain = atoi(args[5]);
+	}
+	if(mode == 0) {
+		loadjbealestartregs();
+	} else {
+		loadStartRegs(mode, hflip, vflip, exposure, gain);
+	}
 	MMAL_COMPONENT_T *rawcam;
 	MMAL_STATUS_T status;
 	MMAL_PORT_T *output;
@@ -331,21 +356,59 @@ void loadModeDefaultRegisters(int mode);
 void setRegBit(uint16_t reg, int bit, int value) {
 	int i = 0;
 	while(i < regpos && ov5647[i].reg != reg) i++;
+	int found = 0;
 	if(i == regpos) {
 		vcos_log_error("Reg: %d not found!\n", reg);
 		return;
 	}
-	ov5647[i].data ^= (-value ^ ov5647[i].reg) & (1 << bit);
+	ov5647[i].data = (ov5647[i].data | (1 << bit)) & (~( (1 << bit) ^ (value << bit) ));
 }
 
-void loadStartRegs(int mode, int hflip, int vflip, int shutter, int iso) {
+void setReg(uint16_t reg, int startBit, int endBit, int value) {
+	int i;
+	for(i = startBit; i <= endBit; i++) {
+		int n = i - startBit;
+		setRegBit(reg, i, value >> i & 1);
+	}
+}
+
+unsigned int createMask(unsigned int a, int unsigned b) {
+	unsigned int r = 0;
+	unsigned int i;
+	for(i = a; i <= b; i++) {
+		r |= 1 << i;
+	}
+
+	return r;
+}
+
+void loadStartRegs(int mode, int hflip, int vflip, int exposure, int gain) {
 	loadModeDefaultRegisters(mode);
+	if(regpos < num_start_regs) {
+		vcos_log_error("Register buffer too large?:%d %d\n", regpos, num_start_regs);
+		num_start_regs = regpos;
+	}
 	setRegBit(0x3820, 1, vflip);
 	setRegBit(0x3821, 1, hflip);
+	if(exposure < 0 || exposure > 262143) {
+		vcos_log_error("Invalid exposurerange:%d, exposure range is 0 to 262143!\n", exposure);
+	} else {
+		setReg(0x3502, 0, 7, exposure & createMask(0, 7));
+		setReg(0x3501, 0, 7, (exposure & createMask(8, 15)) >> 8);
+		setReg(0x3500, 0, 3, (exposure & createMask(16, 19)) >> 16);
+	}
+	if(gain < 0 || gain > 1023) {
+		vcos_log_error("Invalid gain range:%d, gain range is 0 to 1023\n", gain);
+	} else {
+		setReg(0x350B, 0, 7, gain & createMask(0, 7));
+		setReg(0x350A, 0, 1, (gain & createMask(8, 9)) >> 8);
+	}
 }
 
 void loadModeDefaultRegisters(int mode) {
 	if(mode == 1) {
+	        num_start_regs = 94;
+	        ov5647 = (struct sensor_regs *)malloc(sizeof(struct sensor_regs) * num_start_regs);
 		width = 1920;
 		height = 1080;
 		addreg(0x0100, 0x00);
@@ -355,8 +418,6 @@ void loadModeDefaultRegisters(int mode) {
 		addreg(0x3036, 0x62);
 		addreg(0x303C, 0x11);
 		addreg(0x3106, 0xF5);
-		addreg(0x3821, 0x00);
-		addreg(0x3820, 0x00);
 		addreg(0x3827, 0xEC);
 		addreg(0x370C, 0x03);
 		addreg(0x3612, 0x5B);
@@ -379,8 +440,6 @@ void loadModeDefaultRegisters(int mode) {
 		addreg(0x3B07, 0x0C);
 		addreg(0x380C, 0x09);
 		addreg(0x380D, 0x70);
-		addreg(0x380E, 0x04);
-		addreg(0x380F, 0x50);
 		addreg(0x3814, 0x11);
 		addreg(0x3815, 0x11);
 		addreg(0x3708, 0x64);
@@ -437,29 +496,19 @@ void loadModeDefaultRegisters(int mode) {
 		addreg(0x3503, 0x03);
 		addreg(0x3820, 0x00);
 		addreg(0x3821, 0x02);
-		addreg(0x350A, 0x00);
-		addreg(0x350B, 0x10);
-		addreg(0x3212, 0x00);
 		addreg(0x380E, 0x04);
 		addreg(0x380F, 0x66);
+		addreg(0x350A, 0x00);
+		addreg(0x350B, 0x10);
 		addreg(0x3500, 0x00);
 		addreg(0x3501, 0x15);
 		addreg(0x3502, 0x20);
-		addreg(0x3212, 0x10);
-		addreg(0x3212, 0xA0);
-		addreg(0x350A, 0x00);
-		addreg(0x350B, 0x10);
-		addreg(0x350A, 0x00);
-		addreg(0x350B, 0x10);
-		addreg(0x3212, 0x00);
-		addreg(0x3500, 0x00);
-		addreg(0x3501, 0x15);
-		addreg(0x3502, 0x20);
-		addreg(0x3212, 0x10);
 		addreg(0x3212, 0xA0);
 		addreg(0x0100, 0x01);
 	}
 	if(mode == 2) {
+	        num_start_regs = 94;
+	        ov5647 = (struct sensor_regs *)malloc(sizeof(struct sensor_regs) * num_start_regs);
 		width = 2592;
 		height = 1944;
 		addreg(0x0100, 0x00);
@@ -469,8 +518,6 @@ void loadModeDefaultRegisters(int mode) {
 		addreg(0x3036, 0x69);
 		addreg(0x303C, 0x11);
 		addreg(0x3106, 0xF5);
-		addreg(0x3821, 0x00);
-		addreg(0x3820, 0x00);
 		addreg(0x3827, 0xEC);
 		addreg(0x370C, 0x03);
 		addreg(0x3612, 0x5B);
@@ -493,8 +540,6 @@ void loadModeDefaultRegisters(int mode) {
 		addreg(0x3B07, 0x0C);
 		addreg(0x380C, 0x0B);
 		addreg(0x380D, 0x1C);
-		addreg(0x380E, 0x07);
-		addreg(0x380F, 0xB0);
 		addreg(0x3814, 0x11);
 		addreg(0x3815, 0x11);
 		addreg(0x3708, 0x64);
@@ -551,29 +596,19 @@ void loadModeDefaultRegisters(int mode) {
 		addreg(0x3503, 0x03);
 		addreg(0x3820, 0x00);
 		addreg(0x3821, 0x02);
-		addreg(0x350A, 0x00);
-		addreg(0x350B, 0x10);
-		addreg(0x3212, 0x00);
 		addreg(0x380E, 0x08);
 		addreg(0x380F, 0x03);
+		addreg(0x350A, 0x00);
+		addreg(0x350B, 0x10);
 		addreg(0x3500, 0x00);
 		addreg(0x3501, 0x13);
 		addreg(0x3502, 0x40);
-		addreg(0x3212, 0x10);
-		addreg(0x3212, 0xA0);
-		addreg(0x350A, 0x00);
-		addreg(0x350B, 0x10);
-		addreg(0x350A, 0x00);
-		addreg(0x350B, 0x10);
-		addreg(0x3212, 0x00);
-		addreg(0x3500, 0x00);
-		addreg(0x3501, 0x13);
-		addreg(0x3502, 0x40);
-		addreg(0x3212, 0x10);
 		addreg(0x3212, 0xA0);
 		addreg(0x0100, 0x01);
 	}
 	if(mode == 3) {
+	        num_start_regs = 94;
+	        ov5647 = (struct sensor_regs *)malloc(sizeof(struct sensor_regs) * num_start_regs);
 		width = 2592;
 		height = 1944;
 		addreg(0x0100, 0x00);
@@ -583,8 +618,6 @@ void loadModeDefaultRegisters(int mode) {
 		addreg(0x3036, 0x34);
 		addreg(0x303C, 0x11);
 		addreg(0x3106, 0xF5);
-		addreg(0x3821, 0x00);
-		addreg(0x3820, 0x00);
 		addreg(0x3827, 0xEC);
 		addreg(0x370C, 0x03);
 		addreg(0x3612, 0x5B);
@@ -607,8 +640,6 @@ void loadModeDefaultRegisters(int mode) {
 		addreg(0x3B07, 0x0C);
 		addreg(0x380C, 0x1F);
 		addreg(0x380D, 0x1B);
-		addreg(0x380E, 0x07);
-		addreg(0x380F, 0xB0);
 		addreg(0x3814, 0x11);
 		addreg(0x3815, 0x11);
 		addreg(0x3708, 0x64);
@@ -665,29 +696,19 @@ void loadModeDefaultRegisters(int mode) {
 		addreg(0x3503, 0x03);
 		addreg(0x3820, 0x00);
 		addreg(0x3821, 0x02);
-		addreg(0x350A, 0x00);
-		addreg(0x350B, 0x10);
-		addreg(0x3212, 0x00);
 		addreg(0x380E, 0x15);
 		addreg(0x380F, 0x56);
+		addreg(0x350A, 0x00);
+		addreg(0x350B, 0x10);
 		addreg(0x3500, 0x00);
 		addreg(0x3501, 0x03);
 		addreg(0x3502, 0x60);
-		addreg(0x3212, 0x10);
-		addreg(0x3212, 0xA0);
-		addreg(0x350A, 0x00);
-		addreg(0x350B, 0x10);
-		addreg(0x350A, 0x00);
-		addreg(0x350B, 0x10);
-		addreg(0x3212, 0x00);
-		addreg(0x3500, 0x00);
-		addreg(0x3501, 0x03);
-		addreg(0x3502, 0x60);
-		addreg(0x3212, 0x10);
 		addreg(0x3212, 0xA0);
 		addreg(0x0100, 0x01);
 	}
 	if(mode == 4) {
+	        num_start_regs = 92;
+	        ov5647 = (struct sensor_regs *)malloc(sizeof(struct sensor_regs) * num_start_regs);
 		width = 1296;
 		height = 972;
 		addreg(0x0100, 0x00);
@@ -697,8 +718,6 @@ void loadModeDefaultRegisters(int mode) {
 		addreg(0x3036, 0x62);
 		addreg(0x303C, 0x11);
 		addreg(0x3106, 0xF5);
-		addreg(0x3821, 0x01);
-		addreg(0x3820, 0x41);
 		addreg(0x3827, 0xEC);
 		addreg(0x370C, 0x03);
 		addreg(0x3612, 0x59);
@@ -733,8 +752,6 @@ void loadModeDefaultRegisters(int mode) {
 		addreg(0x380B, 0xCC);
 		addreg(0x380C, 0x07);
 		addreg(0x380D, 0x68);
-		addreg(0x380E, 0x04);
-		addreg(0x380F, 0x50);
 		addreg(0x3811, 0x10);
 		addreg(0x3813, 0x06);
 		addreg(0x3814, 0x31);
@@ -777,29 +794,19 @@ void loadModeDefaultRegisters(int mode) {
 		addreg(0x3503, 0x03);
 		addreg(0x3820, 0x41);
 		addreg(0x3821, 0x03);
-		addreg(0x350A, 0x00);
-		addreg(0x350B, 0x10);
-		addreg(0x3212, 0x00);
 		addreg(0x380E, 0x05);
 		addreg(0x380F, 0x9B);
+		addreg(0x350A, 0x00);
+		addreg(0x350B, 0x10);
 		addreg(0x3500, 0x00);
 		addreg(0x3501, 0x1A);
 		addreg(0x3502, 0xF0);
-		addreg(0x3212, 0x10);
-		addreg(0x3212, 0xA0);
-		addreg(0x350A, 0x00);
-		addreg(0x350B, 0x10);
-		addreg(0x350A, 0x00);
-		addreg(0x350B, 0x10);
-		addreg(0x3212, 0x00);
-		addreg(0x3500, 0x00);
-		addreg(0x3501, 0x1A);
-		addreg(0x3502, 0xF0);
-		addreg(0x3212, 0x10);
 		addreg(0x3212, 0xA0);
 		addreg(0x0100, 0x01);
 	}
 	if(mode == 5) {
+	        num_start_regs = 92;
+	        ov5647 = (struct sensor_regs *)malloc(sizeof(struct sensor_regs) * num_start_regs);
 		width = 1296;
 		height = 730;
 		addreg(0x0100, 0x00);
@@ -809,8 +816,6 @@ void loadModeDefaultRegisters(int mode) {
 		addreg(0x3036, 0x62);
 		addreg(0x303C, 0x11);
 		addreg(0x3106, 0xF5);
-		addreg(0x3821, 0x01);
-		addreg(0x3820, 0x41);
 		addreg(0x3827, 0xEC);
 		addreg(0x370C, 0x03);
 		addreg(0x3612, 0x59);
@@ -845,8 +850,6 @@ void loadModeDefaultRegisters(int mode) {
 		addreg(0x380B, 0xDA);
 		addreg(0x380C, 0x07);
 		addreg(0x380D, 0x68);
-		addreg(0x380E, 0x04);
-		addreg(0x380F, 0x50);
 		addreg(0x3811, 0x10);
 		addreg(0x3813, 0x06);
 		addreg(0x3814, 0x31);
@@ -889,47 +892,31 @@ void loadModeDefaultRegisters(int mode) {
 		addreg(0x3503, 0x03);
 		addreg(0x3820, 0x41);
 		addreg(0x3821, 0x03);
-		addreg(0x350A, 0x00);
-		addreg(0x350B, 0x10);
-		addreg(0x3212, 0x00);
 		addreg(0x380E, 0x05);
 		addreg(0x380F, 0x9B);
+		addreg(0x350A, 0x00);
+		addreg(0x350B, 0x10);
 		addreg(0x3500, 0x00);
 		addreg(0x3501, 0x1A);
 		addreg(0x3502, 0xF0);
-		addreg(0x3212, 0x10);
-		addreg(0x3212, 0xA0);
-		addreg(0x350A, 0x00);
-		addreg(0x350B, 0x10);
-		addreg(0x350A, 0x00);
-		addreg(0x350B, 0x10);
-		addreg(0x3212, 0x00);
-		addreg(0x3500, 0x00);
-		addreg(0x3501, 0x1A);
-		addreg(0x3502, 0xF0);
-		addreg(0x3212, 0x10);
 		addreg(0x3212, 0xA0);
 		addreg(0x0100, 0x01);
 	}
 	if(mode == 6) {
+	        num_start_regs = 90;
+	        ov5647 = (struct sensor_regs *)malloc(sizeof(struct sensor_regs) * num_start_regs);
 		width = 640;
 		height = 480;
 		addreg(0x0100, 0x00);
 		addreg(0x0103, 0x01);
-		addreg(0x3035, 0x11);
 		addreg(0x3036, 0x46);
 		addreg(0x303C, 0x11);
-		addreg(0x3821, 0x01);
-		addreg(0x3820, 0x41);
 		addreg(0x370C, 0x03);
 		addreg(0x3612, 0x59);
 		addreg(0x3618, 0x00);
 		addreg(0x5000, 0x06);
 		addreg(0x5003, 0x08);
 		addreg(0x5A00, 0x08);
-		addreg(0x3000, 0xFF);
-		addreg(0x3001, 0xFF);
-		addreg(0x3002, 0xFF);
 		addreg(0x301D, 0xF0);
 		addreg(0x3A18, 0x00);
 		addreg(0x3A19, 0xF8);
@@ -937,8 +924,6 @@ void loadModeDefaultRegisters(int mode) {
 		addreg(0x3B07, 0x0C);
 		addreg(0x380C, 0x07);
 		addreg(0x380D, 0x3C);
-		addreg(0x380E, 0x01);
-		addreg(0x380F, 0xF8);
 		addreg(0x3814, 0x71);
 		addreg(0x3815, 0x71);
 		addreg(0x3708, 0x64);
@@ -991,7 +976,6 @@ void loadModeDefaultRegisters(int mode) {
 		addreg(0x3001, 0x00);
 		addreg(0x3002, 0x00);
 		addreg(0x3017, 0xE0);
-		addreg(0x301C, 0xFC);
 		addreg(0x3636, 0x06);
 		addreg(0x3016, 0x08);
 		addreg(0x3827, 0xEC);
@@ -1004,29 +988,19 @@ void loadModeDefaultRegisters(int mode) {
 		addreg(0x3503, 0x03);
 		addreg(0x3820, 0x41);
 		addreg(0x3821, 0x03);
-		addreg(0x350A, 0x00);
-		addreg(0x350B, 0x10);
-		addreg(0x3212, 0x00);
 		addreg(0x380E, 0x02);
 		addreg(0x380F, 0xEC);
+		addreg(0x350A, 0x00);
+		addreg(0x350B, 0x10);
 		addreg(0x3500, 0x00);
 		addreg(0x3501, 0x13);
 		addreg(0x3502, 0xB0);
-		addreg(0x3212, 0x10);
-		addreg(0x3212, 0xA0);
-		addreg(0x350A, 0x00);
-		addreg(0x350B, 0x10);
-		addreg(0x350A, 0x00);
-		addreg(0x350B, 0x10);
-		addreg(0x3212, 0x00);
-		addreg(0x3500, 0x00);
-		addreg(0x3501, 0x13);
-		addreg(0x3502, 0xB0);
-		addreg(0x3212, 0x10);
 		addreg(0x3212, 0xA0);
 		addreg(0x0100, 0x01);
 	}
 	if(mode == 7) {
+	        num_start_regs = 92;
+	        ov5647 = (struct sensor_regs *)malloc(sizeof(struct sensor_regs) * num_start_regs);
 		width = 640;
 		height = 480;
 		addreg(0x0100, 0x00);
@@ -1036,8 +1010,6 @@ void loadModeDefaultRegisters(int mode) {
 		addreg(0x3036, 0x69);
 		addreg(0x303C, 0x11);
 		addreg(0x3106, 0xF5);
-		addreg(0x3821, 0x01);
-		addreg(0x3820, 0x41);
 		addreg(0x3827, 0xEC);
 		addreg(0x370C, 0x0F);
 		addreg(0x3612, 0x59);
@@ -1060,8 +1032,6 @@ void loadModeDefaultRegisters(int mode) {
 		addreg(0x3B07, 0x0C);
 		addreg(0x380C, 0x07);
 		addreg(0x380D, 0x3C);
-		addreg(0x380E, 0x01);
-		addreg(0x380F, 0xF8);
 		addreg(0x3814, 0x71);
 		addreg(0x3815, 0x35);
 		addreg(0x3708, 0x64);
@@ -1116,25 +1086,13 @@ void loadModeDefaultRegisters(int mode) {
 		addreg(0x3503, 0x03);
 		addreg(0x3820, 0x41);
 		addreg(0x3821, 0x03);
-		addreg(0x350A, 0x00);
-		addreg(0x350B, 0x10);
-		addreg(0x3212, 0x00);
 		addreg(0x380E, 0x03);
 		addreg(0x380F, 0x12);
+		addreg(0x350A, 0x00);
+		addreg(0x350B, 0x10);
 		addreg(0x3500, 0x00);
 		addreg(0x3501, 0x1D);
 		addreg(0x3502, 0x80);
-		addreg(0x3212, 0x10);
-		addreg(0x3212, 0xA0);
-		addreg(0x350A, 0x00);
-		addreg(0x350B, 0x10);
-		addreg(0x350A, 0x00);
-		addreg(0x350B, 0x10);
-		addreg(0x3212, 0x00);
-		addreg(0x3500, 0x00);
-		addreg(0x3501, 0x1D);
-		addreg(0x3502, 0x80);
-		addreg(0x3212, 0x10);
 		addreg(0x3212, 0xA0);
 		addreg(0x0100, 0x01);
 	}
